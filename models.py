@@ -4,10 +4,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from utils import *
+import copy
 
 class Flatten(nn.Module):
     def forward(self, x):
-        return x.view(x.size(0), -1)
+        return x.reshape(x.size(0), -1)
 
 class ResBlock(nn.Module):
     def __init__(self, n_channels):
@@ -74,6 +75,23 @@ class ImpalaCNN(nn.Module):
         c = self.critic(x)
         a = nn.LogSoftmax(dim=-1)(self.actor(x))
         return a, c
+    
+    def forward_ftre_lgit(self, x):
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.block3(x)
+        x = nn.ReLU()(x)
+        x = Flatten()(x)
+        
+        feature = copy.deepcopy(x)
+        
+        x = self.fc(x)
+        x = nn.ReLU()(x)
+        
+        c = self.critic(x)
+        logits = self.actor(x)
+        a = nn.LogSoftmax(dim=-1)(logits)
+        return a, c, logits, feature
     
 # Proper orthogonal init in the right locations is important
 

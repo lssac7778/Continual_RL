@@ -12,15 +12,21 @@ def collect_traj(agent, env, steps, device):
         agent.eval()
         
         frame = env.reset()
-        frames_, actions_, epinfos = [], [], []
+        frames_, actions_, values_, logits_, features_, epinfos = [], [], [], [], [], []
 
         for s in range(steps):
             frame = np_to_pytorch_img(frame)
             frames_.append(frame.numpy())
-            action_probs, state_estimate = agent(frame.to(device))
+            
+            action_probs, state_estimate, logits, features = agent.forward_ftre_lgit(frame.to(device))
+            
             action = get_action(action_probs).cpu().numpy()
             frame, reward, done, info = env.step(action)
+            
             actions_.append(action)
+            logits_.append(logits)
+            features_.append(features)
+            values_.append(state_estimate)
 
             for i_info in info:
                 episode_info = i_info.get('episode')
@@ -28,20 +34,16 @@ def collect_traj(agent, env, steps, device):
                     
             if s%verbose_step==0:
                 print("collecting trajectory {}/{}".format(s, steps))
-
-        frames_ = np.array(frames_)
-        actions_ = np.array(actions_)
         
-        frames_ = torch.from_numpy(frames_)
-        actions_ = torch.from_numpy(actions_)
+        results = [frames_, actions_, values_, logits_, features_]
         
-        fsize = list(frames_.size())
-        frames_ = torch.reshape(frames_, [fsize[0]*fsize[1]] + fsize[2:])
+        for i in range(len(results)):
+            results[i] = np.array(results[i])
+            results[i] = torch.from_numpy(results[i])
+            resize = list(results[i].size())
+            results[i] = torch.reshape(results[i], [resize[0]*resize[1]] + resize[2:])
         
-        asize = list(actions_.size())
-        actions_ = torch.reshape(actions_, [asize[0]*asize[1]] + asize[2:])
-        
-        return frames_, actions_, epinfos
+        return results
 
 class simple_a2cppo_gradcam:
     
@@ -112,31 +114,40 @@ class Storage:
         
         self.memeffi = memeffi
     
-    def append(self, env_index, frames, actions, cam):
+    def append(self, env_index, frames, actions, values, features, logits, cam):
         ''' all inputs are tensors except gradcam '''
         
         self.env_indexs.append(env_index)
         
+        data = {'frames':frames,
+                  'actions':actions,
+                  'values':values,
+                  'features':features,
+                  'logits':logits,
+                  'cams':cam}
+        
         if not self.memeffi:
-            self.data[env_index] = {'frames':frames,
-                                      'actions':actions,
-                                      'cams':cam}
+            self.data[env_index] = data
         else:
             data_name = "traj" + str(env_index) + ".pickle"
             self.data_names[env_index] = data_name
             print("saving traj")
-            self.save_obj(data_name, {'frames':frames,
-                                      'actions':actions,
-                                      'cams':cam})
+            self.save_obj(data_name, data)
             del frames
             del actions
+            del features
+            del logits
             del cam
             gc.collect()
 
     def get_batch(self):
-        frames = []
-        actions = []
-        cams = []
+        
+        results = {'frames':[],
+                  'actions':[],
+                  'values':[],
+                  'features':[],
+                  'logits':[],
+                  'cams':[]}
         
         perm = torch.randperm(self.traj_size)
         indices = perm[:self.batch_size]
@@ -148,15 +159,16 @@ class Storage:
             else:
                 traj = self.load_obj(self.data_names[idx])
             
-            frames.append(copy.deepcopy(torch.index_select(traj['frames'], 0, indices)))
-            actions.append(copy.deepcopy(torch.index_select(traj['actions'], 0, indices)))
-            cams.append(copy.deepcopy(torch.index_select(traj['cams'], 0, indices)))
+            for key in results.keys():
+                results[key].append(copy.deepcopy(torch.index_select(traj[key], 0, indices)))
             
             del traj
             gc.collect()
         
-        fr, ac, ca = torch.cat(frames, 0), torch.cat(actions, 0), torch.cat(cams, 0)
-        return fr, ac, ca
+        for key in results.keys():
+            results[key] = torch.cat(results[key], 0)
+            
+        return results.values()
     
     def save_obj(self, name, data):
         with open(name, 'wb') as f:
