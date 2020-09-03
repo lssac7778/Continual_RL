@@ -10,14 +10,15 @@ from procgen import ProcgenEnv
 import os
 from tensorboardX import SummaryWriter
 import sys
+import gc
 
-from arguments import get_args_continual_baselines
+from arguments import get_args_continual
 from utils import *
 from models import *
 from ppo import *
 from continual import *
 
-args = get_args_continual_baselines()
+args = get_args_continual()
 
 '''cuda setting'''
 
@@ -59,7 +60,8 @@ n_steps = 256
 opt = torch.optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
 n_obs_per_round = n_envs * n_steps;
 
-target_n_obs = 10_000_000 * len(envs)
+#target_n_obs = 10_000_000 * len(envs)
+target_n_obs = 10_000_0 * len(envs)
 
 n_minibatches = 8
 bs = n_obs_per_round // n_minibatches
@@ -77,18 +79,18 @@ n_obs_per_round, n_rounds, bs
 '''Hyperparameters for continual learning'''
 
 verbose = False
-traj_len = 4096
+traj_len = 3072
 eval_steps = n_steps
 cont_batch_size = n_steps
-cam_batch_size = 256
+cam_batch_size = 512
 
-storage = Storage(cont_batch_size, traj_len, memeffi=True)
+storage = Storage(cont_batch_size, traj_len, device, memeffi=True)
 
 feature_module_str = "block3"
 target_layer_str = ["res2"]
 
-use_cam_loss = True
-use_logit_loss = True
+use_cam_loss = not args.no_camloss
+use_logit_loss = not args.no_logitloss
 
 assert use_cam_loss or use_logit_loss
 
@@ -130,6 +132,8 @@ print("log_path :",log_path)
 print("target_n_obs :", target_n_obs)
 print("traj_len :", traj_len)
 print("cam layer : {} {}".format(feature_module_str, target_layer_str))
+print("use cam loss :", use_cam_loss)
+print("use logit loss :", use_logit_loss)
 print("================================")
 print()
 
@@ -261,6 +265,8 @@ for i in range(1, n_rounds):
             
             total_loss = critic_loss - entropy_bonus - action_gain
             total_loss /= accumulation_steps
+            
+            opt.zero_grad()
             total_loss.backward()
 
             if grad_accum_counter % accumulation_steps == 0:
@@ -272,39 +278,75 @@ for i in range(1, n_rounds):
         loss = np.array(epoch_losses).mean()
         losses.append(loss)
         
-        """Train through Continual loss"""
-        
-        if env_index > 0:
-            ctrain_frames, ctrain_actions, ctrain_values, ctrain_features, ctrain_logits, ctrain_cams = storage.get_batch()
+    
+    del frames
+    del actions
+    del returns
+    del old_action_probs
+    del old_state_estimates
+    gc.collect()
+    
+    if env_index > 0:
 
+        #ctrain_frames, ctrain_actions, ctrain_values, ctrain_features, ctrain_logits, ctrain_cams = storage.get_batch()
+        ctrain_frames, ctrain_actions, ctrain_values, ctrain_logits, ctrain_cams = storage.get_batch()
+        ctrain_actions = ctrain_actions.cpu()
+        ctrain_actions.detach()
+        
+        for e in range(n_opt_epochs):
+            '''shuffle data'''
+            dataset_ix = torch.randperm(len(ctrain_values))
+            ctrain_frames = ctrain_frames[dataset_ix]
+            ctrain_actions = ctrain_actions[dataset_ix]
+            ctrain_values = ctrain_values[dataset_ix]
+            #ctrain_features = ctrain_features[dataset_ix]
+            ctrain_logits = ctrain_logits[dataset_ix]
+            ctrain_cams = ctrain_cams[dataset_ix]
+
+            """Train through Continual loss"""
+
+            _, ctrain_output_values, ctrain_output_logits, _ = \
+                                            agent.forward_ftre_lgit(ctrain_frames.to(device))
+            
             ctrain_output_cams = simple_a2cppo_gradcam(agent,
                                       feature_module_str=feature_module_str, 
                                       target_layer_str=target_layer_str,
                                       use_cuda=True, 
-                                      trainable=True)(ctrain_frames, ctrain_actions)
-            ctrain_output_actions, ctrain_output_values, ctrain_output_logits, _ = agent.forward_ftre_lgit(ctrain_frames)
-            
+                                      trainable=True).batch_call(ctrain_frames, ctrain_actions, cam_batch_size)
+
             '''get loss'''
-            CL_loss = 0
-            
+
             cam_loss = ((ctrain_output_cams.cuda() - ctrain_cams.cuda())**2).mean()
-            logits_loss = F.kl_div(ctrain_actions, ctrain_output_actions)
+
+            #logits_loss = F.kl_div(ctrain_logits, ctrain_output_logits)
+            logits_loss = ((ctrain_logits - ctrain_output_logits)**2).mean()
             
-            
-            if use_cam_loss:
-                CL_loss += cam_loss
-            if use_logit_loss:
-                CL_loss += logits_loss
-            
+            value_loss = ((ctrain_values - ctrain_output_values)**2).mean()
+
+
+            if use_cam_loss and use_logit_loss:
+                CL_loss = cam_loss + logits_loss + value_loss
+            elif use_cam_loss:
+                CL_loss = cam_loss
+            elif use_logit_loss:
+                CL_loss = logits_loss + value_loss
+
             '''backprop'''
-            
+            opt.zero_grad()
             CL_loss.backward()
 
             nn.utils.clip_grad_norm_(agent.parameters(), .5)
             opt.step()
-            opt.zero_grad()
 
             CL_losses.append(CL_loss.item())
+            
+        del ctrain_frames
+        del ctrain_actions
+        del ctrain_values
+        #del ctrain_features
+        del ctrain_logits
+        del ctrain_cams
+        gc.collect()
         
         
     

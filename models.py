@@ -81,15 +81,15 @@ class ImpalaCNN(nn.Module):
         x = self.block2(x)
         x = self.block3(x)
         x = nn.ReLU()(x)
-        x = Flatten()(x)
+        feature = Flatten()(x)
         
-        feature = copy.deepcopy(x)
         
-        x = self.fc(x)
+        x = self.fc(feature)
         x = nn.ReLU()(x)
         
         c = self.critic(x)
         logits = self.actor(x)
+        
         a = nn.LogSoftmax(dim=-1)(logits)
         return a, c, logits, feature
     

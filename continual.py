@@ -16,14 +16,14 @@ def collect_traj(agent, env, steps, device):
 
         for s in range(steps):
             frame = np_to_pytorch_img(frame)
-            frames_.append(frame.numpy())
+            frames_.append(frame)
             
             action_probs, state_estimate, logits, features = agent.forward_ftre_lgit(frame.to(device))
             
             action = get_action(action_probs).cpu().numpy()
             frame, reward, done, info = env.step(action)
             
-            actions_.append(action)
+            actions_.append(torch.from_numpy(action))
             logits_.append(logits)
             features_.append(features)
             values_.append(state_estimate)
@@ -38,15 +38,7 @@ def collect_traj(agent, env, steps, device):
         results = [frames_, actions_, values_, logits_, features_]
         
         for i in range(len(results)):
-            
-            if type(results[i][0])==np.ndarray:
-                results[i] = np.array(results[i])
-                results[i] = torch.from_numpy(results[i])
-            else:
-                results[i] = torch.cat(results[i], 0)
-                
-            resize = list(results[i].size())
-            results[i] = torch.reshape(results[i], [resize[0]*resize[1]] + resize[2:])
+            results[i] = torch.cat(results[i], 0)
         
         return results
 
@@ -57,7 +49,8 @@ class simple_a2cppo_gradcam:
     def __init__(self, model, 
                  feature_module_str="block2", 
                  target_layer_str="res2", 
-                 use_cuda=True, trainable=False, 
+                 use_cuda=True, 
+                 trainable=False, 
                  norm_scale = True):
         
         cam_model = copy.deepcopy(model)
@@ -66,7 +59,7 @@ class simple_a2cppo_gradcam:
         del cam_model.critic
         
         self.action_size = cam_model.actor.out_features
-        
+        self.use_cuda = use_cuda
         self.model = model
         
         assert feature_module_str in self.feature_modules
@@ -79,9 +72,12 @@ class simple_a2cppo_gradcam:
                         norm_scale=norm_scale)
     
     def __call__(self, inputs, action_index, normalize_size={"min":0, "max":1}):
+        if self.use_cuda:
+            inputs = inputs.cuda()
         return self.grad_cam(inputs, action_index, normalize_size=normalize_size)
     
     def batch_call(self, inputs, action_index, batch_size, normalize_size={"min":0, "max":1}):
+            
         data_len = inputs.size()[0]
         cams = []
         checkpoint = 0
@@ -89,14 +85,29 @@ class simple_a2cppo_gradcam:
         for idx in range(0, data_len, batch_size):
             
             if idx+batch_size > data_len:
-                cam = self.grad_cam(inputs[idx:], 
-                                action_index[idx:],
-                                normalize_size=normalize_size)
+                
+                batch_inputs = inputs[idx:]
+                batch_action_index = action_index[idx:]
             else:
-                cam = self.grad_cam(inputs[idx:idx+batch_size], 
-                                    action_index[idx:idx+batch_size],
-                                    normalize_size=normalize_size)
+                
+                batch_inputs = inputs[idx:idx+batch_size]
+                batch_action_index = action_index[idx:idx+batch_size]
+            
+            '''
+            if self.use_cuda:
+                batch_inputs = copy.deepcopy(batch_inputs)
+                
+                batch_inputs = batch_inputs.cuda()
+            '''
+            
+            cam = self.grad_cam(batch_inputs,
+                                batch_action_index,
+                                normalize_size=normalize_size)
+                
             cams.append(cam)
+            
+            del batch_inputs
+            del batch_action_index
             
             if idx > checkpoint:
                 print("generating grad-cam {}/{}".format(idx, data_len))
@@ -110,12 +121,14 @@ class simple_a2cppo_gradcam:
         
 
 class Storage:
-    def __init__(self, batch_size, traj_size, memeffi=False):
+    def __init__(self, batch_size, traj_size, device, memeffi=False):
         self.data = {}
         self.data_names = {}
         self.env_indexs = []
         self.batch_size = batch_size
         self.traj_size = traj_size
+        
+        self.device = device
         
         self.memeffi = memeffi
     
@@ -124,12 +137,12 @@ class Storage:
         
         self.env_indexs.append(env_index)
         
-        data = {'frames':frames,
-                  'actions':actions,
-                  'values':values,
-                  'features':features,
-                  'logits':logits,
-                  'cams':cam}
+        data = {'frames':frames.detach(),
+                  'actions':actions.detach(),
+                  'values':values.detach(),
+                  #'features':features.detach(),
+                  'logits':logits.detach(),
+                  'cams':cam.detach()}
         
         if not self.memeffi:
             self.data[env_index] = data
@@ -144,13 +157,14 @@ class Storage:
             del logits
             del cam
             gc.collect()
+        print("...done")
 
     def get_batch(self):
-        
+        print("get batch from saved data")
         results = {'frames':[],
                   'actions':[],
                   'values':[],
-                  'features':[],
+                  #'features':[],
                   'logits':[],
                   'cams':[]}
         
@@ -165,13 +179,19 @@ class Storage:
                 traj = self.load_obj(self.data_names[idx])
             
             for key in results.keys():
-                results[key].append(copy.deepcopy(torch.index_select(traj[key], 0, indices)))
+                temp = copy.deepcopy(torch.index_select(traj[key].cpu(), 0, indices.cpu()))
+                del traj[key]
+                gc.collect()
+                
+                temp = temp.to(self.device)
+                
+                results[key].append(temp)
             
             del traj
-            gc.collect()
         
         for key in results.keys():
             results[key] = torch.cat(results[key], 0)
+            
             
         return results.values()
     
