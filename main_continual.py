@@ -85,7 +85,12 @@ cam_batch_size = 256
 storage = Storage(cont_batch_size, traj_len, memeffi=True)
 
 feature_module_str = "block3"
-target_layer_str = ["res2", "conv2"]
+target_layer_str = ["res2"]
+
+use_cam_loss = True
+use_logit_loss = True
+
+assert use_cam_loss or use_logit_loss
 
 '''dir settings'''
 
@@ -96,6 +101,11 @@ args.save_dir = os.path.join(args.save_dir, filename)
 args.log_dir = os.path.join(args.log_dir, filename)
 
 id_string = env_name + "_stlv" + str(start_levels[0]) + "~" + str(start_levels[-1]) + "_lvnum" + str(n_levels)
+if use_cam_loss:
+    id_string += "_cam"
+if use_logit_loss:
+    id_string += "_logit"
+
 save_path = os.path.join(args.save_dir, id_string +".pt")
 log_path = os.path.join(args.log_dir, id_string) + "/"
 
@@ -275,11 +285,16 @@ for i in range(1, n_rounds):
             ctrain_output_actions, ctrain_output_values, ctrain_output_logits, _ = agent.forward_ftre_lgit(ctrain_frames)
             
             '''get loss'''
+            CL_loss = 0
             
             cam_loss = ((ctrain_output_cams.cuda() - ctrain_cams.cuda())**2).mean()
             logits_loss = F.kl_div(ctrain_actions, ctrain_output_actions)
             
-            CL_loss = cam_loss + logits_loss
+            
+            if use_cam_loss:
+                CL_loss += cam_loss
+            if use_logit_loss:
+                CL_loss += logits_loss
             
             '''backprop'''
             

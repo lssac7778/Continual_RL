@@ -38,8 +38,13 @@ def collect_traj(agent, env, steps, device):
         results = [frames_, actions_, values_, logits_, features_]
         
         for i in range(len(results)):
-            results[i] = np.array(results[i])
-            results[i] = torch.from_numpy(results[i])
+            
+            if type(results[i][0])==np.ndarray:
+                results[i] = np.array(results[i])
+                results[i] = torch.from_numpy(results[i])
+            else:
+                results[i] = torch.cat(results[i], 0)
+                
             resize = list(results[i].size())
             results[i] = torch.reshape(results[i], [resize[0]*resize[1]] + resize[2:])
         
