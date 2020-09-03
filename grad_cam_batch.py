@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from torch.autograd import Function
 from torchvision import models
+import copy
 
 class FeatureExtractor():
     """ Class for extracting activations and 
@@ -20,12 +21,26 @@ class FeatureExtractor():
     def __call__(self, x):
         outputs = []
         self.gradients = []
-        for name, module in self.model._modules.items():
+        
+        def call_recurr(x, parent_module, ac_module_names, outputs, idx, target_layers):
             
-            x = module(x)
-            if name in self.target_layers:
-                x.register_hook(self.save_gradient)
-                outputs += [x]
+            if len(parent_module._modules.items())==0:
+                return parent_module(x)
+            else:
+                for name, module in parent_module._modules.items():
+                    if name==target_layers[idx] and idx < len(target_layers)-1:
+                        idx += 1
+                        temp_ac_module_names = copy.deepcopy(ac_module_names)
+                        temp_ac_module_names.append(name)
+                        x = call_recurr(x, module, temp_ac_module_names, outputs, idx, target_layers)
+                    else:
+                        x = module(x)
+                        if name == target_layers[idx] and ac_module_names==target_layers[:-1]:
+                            x.register_hook(self.save_gradient)
+                            outputs += [x]
+                return x
+        
+        x = call_recurr(x, self.model, [], outputs, 0, self.target_layers)
         return outputs, x
 
 
