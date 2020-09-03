@@ -1,5 +1,5 @@
 from utils import *
-from grad_cam_batch2 import GradCam
+from grad_cam_batch import GradCam
 import copy
 import numpy as np
 import pickle
