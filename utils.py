@@ -441,6 +441,7 @@ categorical = torch.distributions.categorical.Categorical
 
 def get_action(action_probs, deterministic=False):
     p = action_probs.exp()
+    
     if deterministic:
         m, ix = torch.max(p, dim=-1);
     else:

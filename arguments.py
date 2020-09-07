@@ -97,16 +97,22 @@ def get_args_continual():
         '--save-dir',
         default='./trained_models/',
         help='directory to save agent logs (default: ./trained_models/)')
+    
     parser.add_argument(
-        "--no-camloss", 
-        default=False,
-        action="store_true" ,
-        help="train without cam(activation map) loss")
+        '--cam-loss-coef',
+        type=float,
+        default=1.0,
+        help='cam-loss-coef (default: 1)')
     parser.add_argument(
-        "--no-logitloss", 
-        default=False,
-        action="store_true" ,
-        help="train without logit loss")
+        "--logit-loss-coef", 
+        type=float,
+        default=1.0,
+        help='logit-loss-coef" (default: 1)')
+    parser.add_argument(
+        "--value-loss-coef", 
+        type=float,
+        default=1.0,
+        help='value-loss-coef" (default: 1)')
 
     args = parser.parse_args()
     return args

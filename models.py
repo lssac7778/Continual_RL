@@ -83,7 +83,6 @@ class ImpalaCNN(nn.Module):
         x = nn.ReLU()(x)
         feature = Flatten()(x)
         
-        
         x = self.fc(feature)
         x = nn.ReLU()(x)
         
@@ -91,7 +90,8 @@ class ImpalaCNN(nn.Module):
         logits = self.actor(x)
         
         a = nn.LogSoftmax(dim=-1)(logits)
-        return a, c, logits, feature
+        #return a, c, logits, feature
+        return a.clone(), c, a, feature
     
 # Proper orthogonal init in the right locations is important
 
