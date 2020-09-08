@@ -60,8 +60,7 @@ n_steps = 256
 opt = torch.optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
 n_obs_per_round = n_envs * n_steps;
 
-#target_n_obs = 10_000_000 * len(envs)
-target_n_obs = 10_000_0 * len(envs)
+target_n_obs = 10_000_000 * len(envs)
 
 n_minibatches = 8
 bs = n_obs_per_round // n_minibatches
