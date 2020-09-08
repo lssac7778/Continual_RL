@@ -60,7 +60,8 @@ n_steps = 256
 opt = torch.optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
 n_obs_per_round = n_envs * n_steps;
 
-target_n_obs = 10_000_000 * len(envs)
+#target_n_obs = 10_000_000 * len(envs)
+target_n_obs = 10_000_0 * len(envs)
 
 n_minibatches = 8
 bs = n_obs_per_round // n_minibatches
@@ -88,9 +89,21 @@ storage = Storage(cont_batch_size, traj_len, device, memeffi=True)
 feature_module_str = "block3"
 target_layer_str = ["res2"]
 
-CL_cam_loss_coef = args.cam_loss_coef
-CL_logit_loss_coef = args.logit_loss_coef
-CL_value_loss_coef = args.value_loss_coef
+CL_cam_loss_coef_min = 0.1
+CL_logit_loss_coef_min = 0.1
+CL_value_loss_coef_min = 0.1
+
+CL_cam_loss_coef = linear_scheduler(CL_cam_loss_coef_min, 
+                                    args.cam_loss_coef, 
+                                    env_change_interval)
+
+CL_logit_loss_coef = linear_scheduler(CL_logit_loss_coef_min, 
+                                    args.logit_loss_coef, 
+                                    env_change_interval)
+
+CL_value_loss_coef = linear_scheduler(CL_value_loss_coef_min, 
+                                    args.value_loss_coef, 
+                                    env_change_interval)
 
 '''dir settings'''
 
@@ -102,9 +115,9 @@ args.log_dir = os.path.join(args.log_dir, filename)
 
 id_string = env_name + "_stlv" + str(start_levels[0]) + "~" + str(start_levels[-1]) + "_lvnum" + str(n_levels)
 
-id_string += "_cam" + str(CL_cam_loss_coef)
-id_string += "_logit" + str(CL_logit_loss_coef)
-id_string += "_value" + str(CL_value_loss_coef)
+id_string += "_cam" + str(args.cam_loss_coef)
+id_string += "_logit" + str(args.logit_loss_coef)
+id_string += "_value" + str(args.value_loss_coef)
 
 
 save_path = os.path.join(args.save_dir, id_string +".pt")
@@ -131,9 +144,9 @@ print("log_path :",log_path)
 print("target_n_obs :", target_n_obs)
 print("traj_len :", traj_len)
 print("cam layer : {} {}".format(feature_module_str, target_layer_str))
-print("cam_loss_coef :", CL_cam_loss_coef)
-print("logit_loss_coef :", CL_logit_loss_coef)
-print("value_loss_coef :", CL_value_loss_coef)
+print("cam_loss_coef :", args.cam_loss_coef)
+print("logit_loss_coef :", args.logit_loss_coef)
+print("value_loss_coef :", args.value_loss_coef)
 print("================================")
 print()
 
@@ -172,6 +185,12 @@ for i in range(1, n_rounds):
         env_index += 1
         env = envs[env_index]
         last_frame_ = env.reset()
+        
+        '''reset shedule'''
+        
+        CL_cam_loss_coef.reset()
+        CL_logit_loss_coef.reset()
+        CL_value_loss_coef.reset()
 
 
     '''get trajectories for n_steps'''
@@ -325,7 +344,7 @@ for i in range(1, n_rounds):
             
             value_loss = ((ctrain_values - ctrain_output_values)**2).mean()
             
-            CL_loss = cam_loss*CL_cam_loss_coef + logits_loss*CL_logit_loss_coef + value_loss*CL_value_loss_coef
+            CL_loss = cam_loss*CL_cam_loss_coef() + logits_loss*CL_logit_loss_coef() + value_loss*CL_value_loss_coef()
 
             '''backprop'''
             opt.zero_grad()
@@ -335,6 +354,16 @@ for i in range(1, n_rounds):
             opt.step()
 
             CL_losses.append(CL_loss.item())
+            
+            """linear schedule of coef"""
+            
+            CL_cam_loss_coef.update()
+            CL_logit_loss_coef.update()
+            CL_value_loss_coef.update()
+
+            writer.add_scalar('coef/cam', CL_cam_loss_coef(), total_steps)
+            writer.add_scalar('coef/logit', CL_logit_loss_coef(), total_steps)
+            writer.add_scalar('coef/value', CL_value_loss_coef(), total_steps)
             
         del ctrain_frames
         del ctrain_actions
@@ -354,11 +383,16 @@ for i in range(1, n_rounds):
     
     avg_loss = sum(losses[-n_opt_epochs:])/len(losses[-n_opt_epochs:])
     
-    print("round:{:>4},  avg score:{:>6.2f},  avg loss:{:>6.2f},  env index:{:>2},  total steps:{:>6}".format(i,
-                                                                                  round(float(avg_score), 2),
-                                                                                  round(avg_loss, 2),
-                                                                                  env_index,
-                                                                                  total_steps))
+    print("round:{:>4},  \
+    avg score:{:>6.2f},  \
+    avg loss:{:>6.2f},  \
+    env index:{:>2},  \
+    total steps:{:>6}".format(i,
+                      round(float(avg_score), 2),
+                      round(avg_loss, 2),
+                      env_index,
+                      total_steps))
+    
     writer.add_scalar('avg_score/total', avg_score, total_steps)
     writer.add_scalar('avg_loss/algo', avg_loss, total_steps)
     

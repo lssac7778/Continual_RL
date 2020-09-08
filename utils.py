@@ -468,3 +468,27 @@ def evaluate_agent(agent, env, steps, device):
         
         avg_score = get_avg_score(epinfos)
         return avg_score
+
+class linear_scheduler:
+    def __init__(self, minval, maxval, maxi):
+        self.i = 0
+        self.val = minval
+        
+        self.maxval = maxval
+        self.minval = minval
+        self.maxi = maxi
+    
+    def __call__(self):
+        return self.val
+        
+    def update(self):
+        if self.minval==self.maxval:
+            return
+        
+        if self.i < self.maxi:
+            self.i += 1
+        self.val = (self.maxval-self.minval)/self.maxi*self.i + self.minval
+        
+    def reset(self):
+        self.i = 0
+        self.val = self.minval
